@@ -1,0 +1,118 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+
+Description: >
+  CsvProcessor Project
+  - UploadAPI Lambda to upload CSV to S3
+  - CsvProcessorFunction Lambda to read S3 file and send messages to SQS
+  - SqsConsumerFunction Lambda to consume SQS and insert to DynamoDB
+  - Secrets Manager stores SQS URL automatically
+  - API Gateway exposes UploadAPI Lambda
+
+Globals:
+  Function:
+    Runtime: python3.10
+    Timeout: 30
+    MemorySize: 128
+
+Resources:
+
+  # SQS Queue
+  MyQueue:
+    Type: AWS::SQS::Queue
+    Properties:
+      QueueName: csv-processor-queue
+
+  # DynamoDB Table for storing data
+  DynamoDBTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: CsvProcessorData
+      AttributeDefinitions:
+        - AttributeName: id
+          AttributeType: S
+      KeySchema:
+        - AttributeName: id
+          KeyType: HASH
+      BillingMode: PAY_PER_REQUEST
+
+  # Secrets Manager secret storing the SQS Queue URL
+  MySecret:
+    Type: AWS::SecretsManager::Secret
+    Properties:
+      Name: csv-processor-secret
+      Description: Secret with SQS Queue URL
+      SecretString: !Sub |
+        {
+          "SQS_QUEUE_URL": "${MyQueue.QueueUrl}"
+        }
+
+  # Upload Lambda (uploads CSV to S3)
+  UploadAPI:
+    Type: AWS::Serverless::Function
+    Properties:
+      Handler: app.lambda_handler
+      CodeUri: lambda/upload/
+      Environment:
+        Variables:
+          BUCKET_NAME: !Ref S3Bucket
+      Policies:
+        - S3CrudPolicy:
+            BucketName: !Ref S3Bucket
+      Events:
+        UploadApi:
+          Type: Api
+          Properties:
+            Path: /upload
+            Method: post
+
+  # Lambda to process CSV from S3 and send to SQS
+  CsvProcessorFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      Handler: app.lambda_handler
+      CodeUri: lambda/csv_processor/
+      Environment:
+        Variables:
+          SECRET_NAME: !Ref MySecret
+          BUCKET_NAME: !Ref S3Bucket
+      Policies:
+        - SecretsManagerReadWrite
+        - SQSSendMessagePolicy:
+            QueueName: !GetAtt MyQueue.QueueName
+        - S3ReadPolicy:
+            BucketName: !Ref S3Bucket
+
+  # Lambda to consume SQS and insert into DynamoDB
+  SqsConsumerFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      Handler: app.lambda_handler
+      CodeUri: lambda/sqs_consumer/
+      Environment:
+        Variables:
+          SECRET_NAME: !Ref MySecret
+          DYNAMODB_TABLE_NAME: !Ref DynamoDBTable
+      Policies:
+        - SecretsManagerReadWrite
+        - DynamoDBCrudPolicy:
+            TableName: !Ref DynamoDBTable
+        - SQSReadPolicy:
+            QueueName: csv-processor-queue
+      Events:
+        SqsEvent:
+          Type: SQS
+          Properties:
+            Queue: !GetAtt MyQueue.Arn
+            BatchSize: 10
+
+  # S3 bucket to store CSV files
+  S3Bucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: csv-processor-bucket-${AWS::AccountId}
+
+Outputs:
+  ApiUrl:
+    Description: "API Gateway endpoint URL for Upload API"
+    Value: !Sub "https://${ServerlessRestApi}.execute-api.${AWS::Region}.amazonaws.com/Prod/upload"

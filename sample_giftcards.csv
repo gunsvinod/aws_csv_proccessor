@@ -1,0 +1,4 @@
+card_id,amount,currency,recipient_email,expiration_date
+GC1001,50,USD,test1@example.com,2025-12-31
+GC1002,100,USD,test2@example.com,2025-11-30
+GC1003,25,USD,test3@example.com,2025-10-15
