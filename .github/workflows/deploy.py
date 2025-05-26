@@ -2,7 +2,7 @@ name: Deploy SAM Application
 
 on:
   push:
-    branches: [ main ]
+    branches: [ master ]
 
 jobs:
   deploy:
